@@ -100,7 +100,8 @@ function init_your_gateway_class() {
 		public function process_payment( $order_id ) {
 			$order  = wc_get_order( $order_id );
 			$callid = urldecode($order->order_key);
-			echo(WC()->api_request_url( 'WC_Gateway_LibertyBankInstallments' ));die;
+			
+			// TODO: go to bank form
 		}
 
 		/**
