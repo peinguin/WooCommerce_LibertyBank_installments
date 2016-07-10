@@ -12,10 +12,128 @@ Author: Serhii Fesiura
 URI: https://github.com/peinguin/WooCommerce_LibertyBank_installments
 */
 
+class WC_Gateway_LibertyBank_Initer {
+	const PERMALINK = 'prelibrebankinstallment';
 
-add_action( 'plugins_loaded', 'init_your_gateway_class' );
+	public function __construct() {
+		add_action( 'plugins_loaded', 'init_libertybank_gateway_class' );
+		add_action( 'init', array( $this, 'add_page') );
+		add_filter( 'woocommerce_payment_gateways', array( $this, 'add_libertybank_gateway_class') );
+		add_shortcode( 'libertybank_precheckout', array($this, 'showForm') );
+		
+	}
 
-function init_your_gateway_class() {
+	public function add_page() {
+		if (!get_page_by_path(self::PERMALINK)) {
+				wp_insert_post(array(
+					'post_type' => 'page',
+					'post_title' => 'Libertybank preredirect page',
+					'post_content' => '[libertybank_precheckout]',
+					'post_name' => self::PERMALINK,
+					'post_status' => 'publish'
+			));
+		}
+	}
+
+	public function add_libertybank_gateway_class( $methods ) {
+		$methods[] = 'WC_Gateway_LibertyBank_Installments'; 
+		return $methods;
+	}
+
+	public function showForm() {
+		global $wp;
+		$order_id = $_GET['order_id'];
+		if (!$order_id) {
+			$order_id = $wp->query_vars['page'];
+		}
+		if (!$order_id) {
+			return '';
+		}
+		$order = wc_get_order($order_id);
+		if (!$order) {
+			return '';
+		}
+		$callid = urldecode($order->order_key);
+
+		$settings_key = 'woocommerce_libertybankinstallments_settings'; // TODO: remove hardcode
+		$settings = get_option($settings_key);
+
+		$secretkey = $settings['secretkey'];
+		$merchant  = $settings['merchant'];
+		$testmode  = $settings['testmode'] === 'yes' ? 1 : 0;
+		$ordercode = $order->id;
+		$callid = $order->order_key;
+		$shipping_address = $order->get_formatted_shipping_address();
+		$installmenttype = 0;
+		$products = $order->get_items();
+
+		$str = $secretkey
+			. $merchant
+			. $ordercode
+			. $callid
+			. $shipping_address
+			. $testmode;
+
+		foreach ($products as $key => $product) {
+			$str .= $key.$product['name'].$product['qty'].$product['line_total'].$product['type'].$installmenttype; 
+		}         
+		$check = strtoupper(hash('sha256', $str));
+		return $this->getHTMLTemplate($products, $merchant, $testmode, $ordercode, $callid, $shipping_address, $installmenttype, $check);
+	}
+
+	public function getHTMLTemplate($products, $merchant, $testmode, $ordercode, $callid, $shipping_address, $installmenttype, $check) {
+		ob_start(); ?>
+
+		<h1>Go to bank page.</h1>
+		<p>Please, confirm payment.</p>
+		<form method="post" action="http://onlineinstallment.lb.ge/installment">
+			<input type="hidden" name="ordercode" value="<?php echo htmlentities($ordercode); ?>" />
+			<input type="hidden"   name="callid" value="<?php echo htmlentities($callid); ?>" />
+			<input type="hidden" name="shipping_address" value="<?php echo htmlentities($shipping_address, ENT_QUOTES, 'UTF-8'); ?>" />
+			<input type="hidden" name="merchant" value="<?php echo $merchant; ?>" />
+			<input type="hidden" name="testmode" value="<?php echo $testmode; ?>" />
+			<input type="hidden" name="check" value="<?php echo $check; ?>" />
+			<?php $i = 0; foreach ($products as $key => $product) { ?>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][id]"
+					value="<?php echo $key; ?>"
+					/>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][title]"
+					value="<?php echo htmlentities($product['name'], ENT_QUOTES, 'UTF-8'); ?>"
+					/>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][amount]"
+					value="<?php echo $product['qty']; ?>"
+					/>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][price]"
+					value="<?php echo $product['line_total']; ?>"
+					/>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][type]"
+					value="<?php echo $product['type']; ?>"
+					/>
+				<input
+					type="hidden"
+					name="products[<?php echo $i; ?>][installmenttype]"
+					value="<?php echo $installmenttype; ?>"
+					/>
+			<?php $i++; } ?>
+			<input type="submit" value="Go to bank page" />
+		</form> 
+
+		<?php
+		return ob_get_clean();
+	}
+}
+
+function init_libertybank_gateway_class() {
 	class WC_Gateway_LibertyBank_Installments extends WC_Payment_Gateway {
 		public function __construct() {
 			$this->id = 'libertybankinstallments';
@@ -98,10 +216,17 @@ function init_your_gateway_class() {
 		 * @return array
 		 */
 		public function process_payment( $order_id ) {
-			$order  = wc_get_order( $order_id );
-			$callid = urldecode($order->order_key);
-			
-			// TODO: go to bank form
+			$permalink = get_permalink( get_page_by_path( WC_Gateway_LibertyBank_Initer::PERMALINK ) );
+			if ( '' != get_option('permalink_structure') ) {
+				// using pretty permalinks, append to url
+				$url = user_trailingslashit( $permalink . '/' . $order_id ); // www.example.com/pagename/test
+			} else {
+				$url = add_query_arg( 'order_id', $order_id, $permalink ); // www.example.com/pagename/?test
+			}
+			return array(
+				'result'   => 'success',
+				'redirect' => $url
+			);
 		}
 
 		/**
@@ -141,7 +266,7 @@ function init_your_gateway_class() {
 			$str = $status.$installmentid.$ordercode.$callid.$this->secretkey;
 			$calculatedCheck = hash('sha256',$str);
 			
-			if (strcasecmp($check,$calculatedCheck)==0) 
+			if (strcasecmp($check,$calculatedCheck) === 0) {
 				if ( ! $order = wc_get_order( $order_id ) ) {
 					// We have an invalid $order_id, probably because invoice_prefix has changed.
 					$order_id = wc_get_order_id_by_order_key( $order_key );
@@ -169,8 +294,7 @@ function init_your_gateway_class() {
 						$resultdesc = -3;
 					}
 				}
-			}
-			else {
+			} else {
 				WC_Gateway_Paypal::log( 'Error: Security error.' );
 				$resultcode = -3;
 				$resultdesc = -3;
@@ -198,9 +322,4 @@ XML;
 	}
 }
 
-function add_your_gateway_class( $methods ) {
-	$methods[] = 'WC_Gateway_LibertyBank_Installments'; 
-	return $methods;
-}
-
-add_filter( 'woocommerce_payment_gateways', 'add_your_gateway_class' );
+new WC_Gateway_LibertyBank_Initer;
