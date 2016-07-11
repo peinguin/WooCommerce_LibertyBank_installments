@@ -20,7 +20,6 @@ class WC_Gateway_LibertyBank_Initer {
 		add_action( 'init', array( $this, 'add_page') );
 		add_filter( 'woocommerce_payment_gateways', array( $this, 'add_libertybank_gateway_class') );
 		add_shortcode( 'libertybank_precheckout', array($this, 'showForm') );
-		
 	}
 
 	public function add_page() {
@@ -259,13 +258,13 @@ function init_libertybank_gateway_class() {
 
 			$status        = urldecode($_GET["status"]);
 			$installmentid = urldecode($_GET['installmentid']);
-			$ordercode     = urldecode($_GET['ordercode']);
-			$callid        = urldecode($_GET['callid']);
+			$order_id      = urldecode($_GET['ordercode']);
+			$order_key     = urldecode($_GET['callid']);
 			$check         = urldecode($_GET['check']);
 
-			$str = $status.$installmentid.$ordercode.$callid.$this->secretkey;
+			$str = $status.$installmentid.$order_id.$order_key.$this->secretkey;
 			$calculatedCheck = hash('sha256',$str);
-			
+
 			if (strcasecmp($check,$calculatedCheck) === 0) {
 				if ( ! $order = wc_get_order( $order_id ) ) {
 					// We have an invalid $order_id, probably because invoice_prefix has changed.
@@ -286,7 +285,7 @@ function init_libertybank_gateway_class() {
 						$order->update_status( 'on-hold', 'Status REVIEW' );
 					}
 					else if('APPROVED' === $status) {
-						$order->payment_complete( 'Status APPROVED' );
+						$order->payment_complete( $installmentid );
 					}
 					else {
 						WC_Gateway_Paypal::log( 'Error: Strange status: ' . $status );
